@@ -1,0 +1,30 @@
+# /etc/p-usher.toml - every key is optional.
+
+mode = "enforce"
+interval = "1s"
+# allowed_cpus = "8-15"        # default: /sys/devices/system/cpu/isolated
+# move_target = 8              # default: first allowed CPU
+exempt_users = []
+exempt_groups = []
+exempt_comm = []
+notify_throttle = "1h"
+
+[self]
+priority = 95
+
+[notify]
+restrict = true
+move = true
+failed = true
+
+[prometheus]
+dir = "/var/lib/node_exporter"
+retain = "15m"
+
+# [email]
+# relay = "mail.example.org:25"
+# from = "p-usher@example.org"
+# recipient = "{user}@example.org"
+# admin = "admin@example.org"
+# functional_groups = ["svc"]
+# help_url = "https://example.org/realtime"

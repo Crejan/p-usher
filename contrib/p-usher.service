@@ -1,0 +1,23 @@
+[Unit]
+Description=p-usher: keep unprivileged realtime threads off housekeeping CPUs
+Documentation=https://crates.io/crates/p-usher
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/p-usher --config /etc/p-usher.toml
+Restart=always
+RestartSec=2
+# Needs CAP_SYS_NICE (sched_setaffinity on foreign threads, SCHED_FIFO),
+# CAP_IPC_LOCK (mlockall) and read access to every /proc/<pid>; run as root.
+User=root
+LimitMEMLOCK=infinity
+LimitRTPRIO=99
+ProtectSystem=strict
+ReadWritePaths=/var/lib/node_exporter
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

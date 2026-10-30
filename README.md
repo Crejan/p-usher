@@ -80,22 +80,99 @@ tasks, which on a host running p-usher means the isolated CPUs, and gives those
 tasks short `SCHED_DEADLINE` boosts. Run both. Exempt stalld if it runs under a
 non-root uid (`exempt_comm = ["^stalld$"]`).
 
-## Running
+## Installing
+
+p-usher runs on Linux only. Build it on the target host, which needs Rust
+1.85+ and a C compiler for the `email` feature (ring):
 
 ```
-install -m 755 ~/.cargo/bin/p-usher /usr/local/bin/
-install -m 644 contrib/p-usher.toml /etc/p-usher.toml
-install -m 644 contrib/p-usher.service /etc/systemd/system/
-systemctl enable --now p-usher
+cargo install p-usher                  # from crates.io, or from a checkout:
+cargo build --release                  # binary in target/release/p-usher
 ```
+
+Install the binary, the config and the unit. The unit's `ReadWritePaths=`
+directory must exist, or systemd refuses to start the service:
+
+```
+sudo install -m 755 target/release/p-usher /usr/local/bin/   # or ~/.cargo/bin/p-usher
+sudo install -m 644 contrib/p-usher.toml /etc/p-usher.toml
+sudo install -m 644 contrib/p-usher.service /etc/systemd/system/
+sudo mkdir -p /var/lib/node_exporter
+```
+
+Check that there is an allowed set. If `isolated` is empty, boot with
+`isolcpus=` or set `allowed_cpus`:
+
+```
+cat /sys/devices/system/cpu/isolated
+```
+
+Roll out in report mode first. Set `mode = "report"`, then:
+
+```
+sudo p-usher --check                   # validate the configuration
+sudo p-usher --once                    # one scan, prints what it would do
+sudo systemctl daemon-reload
+sudo systemctl enable --now p-usher
+journalctl -u p-usher -f
+```
+
+When the reports look right, switch to `mode = "enforce"` and restart.
 
 p-usher runs as root, because it needs `CAP_SYS_NICE` to change foreign
 threads' affinity. It protects itself with `SCHED_FIFO` priority 95,
 `mlockall` and a pin to the first housekeeping CPU. All three are configurable
 under `[self]` (`priority = 0`, `mlockall = false`, `pin = false`).
 
-`p-usher --check` validates the configuration. `p-usher --once` runs a single
-scan.
+## Testing
+
+### Test suite
+
+```
+cargo test                             # parsing, decisions, throttle, adapters
+sudo -E env "PATH=$PATH" cargo test --test linux_rt
+```
+
+The `linux_rt` test starts a `SCHED_FIFO` thread pinned to a housekeeping CPU
+and checks that the kernel moved it into A. It needs Linux, `CAP_SYS_NICE` and
+two online CPUs, and it skips itself otherwise. It only touches its own thread.
+
+### On a running host
+
+Run these as a **normal user**. Root is exempt, so a test thread owned by root
+stays where it is. The user needs an RT limit (`ulimit -r` > 0), for example
+`alice - rtprio 90` or `@realtime - rtprio 90` in `/etc/security/limits.d/`, which takes effect at the
+next login.
+
+These examples assume CPU 0 is in H and A = 8-15. Use `sleep` or a loop that
+sleeps, never a busy loop: if something goes wrong, a busy loop at FIFO
+priority hangs the CPU.
+
+```
+chrt -f 10 taskset -c 0 sleep 600 &        # move
+sleep 2; taskset -cp $!                    # expect: 8
+
+chrt -f 10 taskset -c 0-15 sleep 600 &     # restrict
+sleep 2; taskset -cp $!                    # expect: 8-15
+
+journalctl -u p-usher -n 5                 # one line per intervention
+cat /var/lib/node_exporter/p_usher.prom    # counters with enforced="true"
+pkill -x sleep
+```
+
+Check the **affinity** (`taskset -cp`, `Cpus_allowed_list` in
+`/proc/<pid>/status`, or `a` in htop), not the current CPU (`ps -o psr`, htop's
+`CPU` column). A sleeping thread only migrates when it wakes up, so its current
+CPU keeps showing the old value. To see the migration itself, use a thread that
+wakes up regularly:
+
+```
+chrt -f 10 taskset -c 0 sh -c 'while :; do sleep 0.2; done' &
+sleep 2; ps -o pid,cls,rtprio,psr,comm -p $!   # psr: 8
+```
+
+In report mode the journal shows `move (report)`, the affinity stays
+unchanged, and the metrics carry `enforced="false"`.
 
 ## Configuration
 
